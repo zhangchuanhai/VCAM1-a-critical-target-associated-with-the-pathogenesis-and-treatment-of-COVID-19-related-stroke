@@ -1,0 +1,1403 @@
+##----0、条件设置----
+# 系统报错改为英文
+Sys.setenv(LANGUAGE = "en")
+# 禁止转化为因子
+options(stringsAsFactors = FALSE)
+# 清空环境
+rm(list=ls())
+# 设置工作目录
+setwd("/home/data/t180324/R/R_project/新冠与脑卒/GSE164485/")
+
+library(aplot)
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(harmony) # 多样本整合
+library(glmGamPoi)
+library(GEOquery)
+library(Matrix)
+library(Matrix.utils)
+library(plyr)
+library(dplyr)
+library(sctransform)
+library(igraph)
+library(factoextra)
+library(ComplexHeatmap)
+library(circlize)
+library(EpicTools)
+require(Hmisc)
+require(dplyr)
+require(openxlsx)
+require(ggplot2)
+library(ggpubr)
+require(cowplot)
+library(data.table)
+library(RColorBrewer)
+library(rowr)
+library(SingleR)
+library(scater)
+library(pheatmap)
+library(nichenetr)
+library(glmGamPoi)
+library(GEOquery)
+library(scCustomize)
+library(dplyr)
+library(stringr)
+
+# data <- read.csv("./GSE164485_gene_expression_20210104.csv.gz", encoding="UTF-8")
+# save(data,file="./GSE164485.rdata")
+# load("~/R/R_project/新冠与脑卒/GSE164485/GSE164485.rdata")
+
+##----1、构建Seurat对象----
+meta <- fread("./GSE164485_meta_data_20210104.csv")
+colnames(meta)[1] <- "ID"
+rownames(data) <- data[,1]
+sce.big <- CreateSeuratObject(counts = t(data[,-1]))
+Idents(sce.big) <- rownames(data)
+sce.big@meta.data[["orig.ident"]] <- Idents(sce.big)
+# 添加疾病状态
+group <- data.frame(Idents(sce.big))
+colnames(group)[1] <- "ID"
+group <- merge(group,meta,by ="ID")
+rownames(group) <- group$ID
+group <- group[,9,drop=F]
+sce.big <- AddMetaData(object = sce.big,                #seurat对象
+                       metadata = group,               #需要添加的metadata
+                       col.name = "group")        #给新添加的metadata命名为agegroup
+
+# 添加组织状态
+tissus <- data.frame(Idents(sce.big))
+colnames(tissus)[1] <- "ID"
+tissus <- merge(tissus,meta,by ="ID")
+rownames(tissus) <- tissus$ID
+tissus <- tissus[,4,drop=F]
+sce.big <- AddMetaData(object = sce.big,                #seurat对象
+                       metadata = tissus,               #需要添加的metadata
+                       col.name = "tissus")        #给新添加的metadata命名为agegroup
+# 添加聚类状态
+cluster <- data.frame(Idents(sce.big))
+colnames(cluster)[1] <- "ID"
+cluster <- merge(cluster,meta,by ="ID")
+rownames(cluster) <- cluster$ID
+cluster <- cluster[,7,drop=F]
+sce.big <- AddMetaData(object = sce.big,                #seurat对象
+                       metadata = cluster,               #需要添加的metadata
+                       col.name = "cluster")        #给新添加的metadata命名为agegroup
+# 添加细胞类型
+cell_type <- data.frame(Idents(sce.big))
+colnames(cell_type)[1] <- "ID"
+cell_type <- merge(cell_type,meta,by ="ID")
+rownames(cell_type) <- cell_type$ID
+cell_type <- cell_type[,8,drop=F]
+sce.big <- AddMetaData(object = sce.big,                #seurat对象
+                       metadata = cell_type,               #需要添加的metadata
+                       col.name = "cell_type")        #给新添加的metadata命名为agegroup
+save(sce.big,file="./sce_big.rdata")
+load("~/R/R_project/新冠与脑卒/GSE164485/sce_big.rdata")
+
+grep(pattern = "^MT-",rownames(sce.big),value = T) # grep查看线粒体基因比例
+sce.big <- subset(sce.big, subset = nFeature_RNA > 200 & nFeature_RNA < 50000) # 过滤，以上面小提琴图为参考进行参数设置
+sce.big <- NormalizeData(sce.big, normalization.method = "LogNormalize", scale.factor = 10000) # 数据标准化
+
+all.genes <- rownames(sce.big)
+sce.big <- ScaleData(sce.big, features = all.genes) # 所有基因归一化
+sce.big <- FindVariableFeatures(sce.big, selection.method = "vst", nfeatures = 2000) # 筛选高变基因
+
+choroidplexus <- subset(x = sce.big, subset = tissus == "choroidplexus")
+save(choroidplexus, file = "./choroidplexus.rdata") # 保存数据
+load("./choroidplexus.rdata")
+
+sce.filter <- choroidplexus
+sce.filter <-  ScaleData(choroidplexus) %>% RunPCA(verbose=FALSE)
+top10 <- head(VariableFeatures(sce.filter), 10)
+# 画出不带标签或带标签基因点图
+plot1 <- VariableFeaturePlot(sce.filter)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+sce_harmony <- sce.filter
+Idents(object=sce_harmony) <- "cell_type"
+#降维聚类
+ElbowPlot(sce_harmony)
+sce_harmony <- RunUMAP(sce_harmony, reduction = "pca", dims = 1:15)
+sce_harmony <- FindNeighbors(sce_harmony, reduction = "pca", dims = 1:15) %>% FindClusters(resolution = c(0,0.1,0.2,0.4,0.5,0.8,1))
+##作图
+#group_by_cluster
+p1 = DimPlot(sce_harmony, reduction = "umap", group.by='group') 
+#group_by_sample
+p2 = DimPlot(sce_harmony, reduction = "umap") 
+#combinate
+p1|p2
+Idents(object=sce_harmony) <- "cell_type"
+DimPlot(sce_harmony, reduction = "umap")
+save(sce_harmony, file = "./choroidplexus.rdata") 
+load("./choroidplexus.rdata")
+
+# ----3、细胞数量可视化比较----
+Idents(object=sce_harmony) <- "cell_type"
+table(sce_harmony$cell_type)#查看各组细胞数
+sce_harmony <- subset(sce_harmony, subset = group != "COVID_HIV")
+table(sce_harmony$group)#查看各组
+prop.table(table(Idents(sce_harmony)))
+table(Idents(sce_harmony), sce_harmony$group)#各组不同细胞群细胞数
+Cellratio <- prop.table(table(Idents(sce_harmony), sce_harmony$group), margin = 2)#计算各组样本不同细胞群比例
+Cellratio <- data.frame(Cellratio)
+library(reshape2)
+cellper <- dcast(Cellratio,Var2~Var1, value.var = "Freq")#长数据转为宽数据
+rownames(cellper) <- cellper[,1]
+cellper <- cellper[,-1]
+
+
+###添加分组信息
+sample <- c("COVID","Ctrl")
+group <- c("COVID","Ctrl")
+samples <- data.frame(sample, group)#创建数据框
+
+rownames(samples)=samples$sample
+cellper$sample <- samples[rownames(cellper),'sample']#R添加列
+cellper$group <- samples[rownames(cellper),'group']#R添加列
+###作图展示
+pplist = list()
+sce_groups = colnames(cellper)[1:15]
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+for(group_ in sce_groups){
+  cellper_  = cellper %>% select(one_of(c('sample','group',group_)))#选择一组数据
+  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
+  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
+  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
+                                                      lower = quantile(percent, 0.25),
+                                                      mean = mean(percent),
+                                                      median = median(percent))#上下分位数
+  print(group_)
+  print(cellper_$median)
+  
+  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
+    stat_summary(fun=mean, geom="point", color="grey60") +
+    theme_cowplot() +
+    theme(axis.text = element_text(size = 10),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain'),legend.position = 'none') + 
+    labs(title = group_,y='Percentage') +
+    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
+  
+  ###组间t检验分析
+  labely = max(cellper_$percent)
+  compare_means(percent ~ group,  data = cellper_)
+  my_comparisons <- list( c("COVID", "Ctrl") )
+  pp1 = pp1 + stat_compare_means(comparisons = my_comparisons,size = 3,method = "t.test")
+  pplist[[group_]] = pp1
+}
+
+colnames(cellper)[1:15]
+library(cowplot)
+plot_grid(pplist[['Mes']],
+          pplist[['Epi']],
+          pplist[['End']],
+          pplist[['Oli']],
+          pplist[['Ast2']])
+
+Cellratio <- as.data.frame(Cellratio)
+colourCount = length(unique(Cellratio$Var1))
+library(ggplot2)
+ggplot(Cellratio) + 
+  geom_bar(aes(x =Var2, y= Freq, fill = Var1),stat = "identity",width = 0.7,size = 0.5,colour = '#222222')+ 
+  theme_classic() +
+  labs(x='Sample',y = 'Ratio')+
+  coord_flip()+
+  theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))
+
+
+
+##----4、寻找markers----
+# 清空环境
+# rm(list=ls())
+
+markers <- sce_harmony %>% FindAllMarkers(only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) %>% 
+  group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+#save(markers,file = "~/R/R_project/新冠与脑卒/GSE164485/choroidplexus_markers.Rdata") # 保存数据
+load("~/R/R_project/新冠与脑卒/GSE164485/choroidplexus_markers.Rdata")
+
+DotPlot(sce_harmony, features = unique(markers$gene))+NoLegend()+coord_flip()
+
+# 细胞聚类图
+library(ggrepel)
+DimPlot(sce_harmony, reduction = "umap", label = TRUE, pt.size = 0.1, label.size = 6,repel=T) + 
+  NoLegend()
+
+
+# markers表达图
+DotPlot(object = sce_harmony, features = unique(markers$gene[c(1:3,11:13,21:23,31:33,41:43,51:53,61:63,71:73,
+                                                               81:83,91:93,101:103,111:113,121:123,131:133,
+                                                               141:143)]))+ 
+  NoLegend()+ 
+  coord_flip() + #翻转X、Y轴
+  theme(panel.grid = element_blank(), 
+        axis.text.x=element_text(angle = 45, hjust = 0.5,vjust=0.5))+ #轴标签
+  labs(x=NULL,y=NULL) + 
+  guides(size = guide_legend("Percent Expression") )+ #legend
+  scale_color_gradientn(colours = c('#330066','#336699','#66CC66','#FFCC33')) #颜色
+
+# 细胞聚类图
+Clustered_DotPlot(seurat_object = sce_harmony, features = unique(markers$gene))
+my36colors <-c('#E5D2DD', '#53A85F', '#F1BB72', '#F3B1A0', '#D6E7A3', '#57C3F3', '#476D87',
+               '#E95C59', '#E59CC4', '#AB3282', '#23452F', '#BD956A', '#8C549C', '#585658',
+               '#9FA3A8', '#E0D4CA', '#5F3D69', '#C5DEBA', '#58A4C3', '#E4C755', '#F7F398',
+               '#AA9A59', '#E63863', '#E39A35', '#C1E6F3', '#6778AE', '#91D0BE', '#B53E2B',
+               '#712820', '#DCC1DD', '#CCE0F5',  '#CCC9E6', '#625D9E', '#68A180', '#3A6963',
+               '#968175'
+)
+
+Clustered_DotPlot(seurat_object = sce_harmony, 
+                  colors_use_exp = c('#330066','#336699','#66CC66','#FFCC33'),
+                  colors_use_idents = my36colors ,
+                  features = unique(markers$gene),
+                  k = 15) 
+coord_flip() #翻转X、Y轴
+
+
+# VlnPlot:小提琴图；FeaturePlot:散点图；DotPlot:气泡图
+
+# 显著性VlnPlot
+source("~/R/R_project/新冠与脑卒/显著性.R")
+library(randomcoloR)
+A <- singlecell_gene_test(subset(x = sce_harmony, idents = "Mes"),
+                          genes.use = c('VCAM1'),
+                          group.by = 'group', 
+                          comp = c("COVID", "Ctrl"),
+                          only_postive = F)
+
+anno_pvalue <- format(A$p_val, scientific = T,digits = 3) 
+anno_sig <- A$sig
+
+plots_violins <- VlnPlot(subset(x = sce_harmony, subset = group != "Influenza"), 
+                         cols = c("limegreen", "navy"),
+                         pt.size = 0,
+                         group.by = "group",
+                         features = c('VCAM1'), 
+                         ncol = 3, 
+                         log = FALSE,
+                         combine = FALSE)
+
+for(i in 1:length(plots_violins)) {
+  data <- plots_violins[[i]]$data
+  colnames(data)[1] <- 'gene'
+  plots_violins[[i]] <- plots_violins[[i]] + 
+    theme_classic() + 
+    theme(axis.text.x = element_text(size = 10,color="black"),
+          axis.text.y = element_text(size = 10,color="black"),
+          axis.title.y= element_text(size=12,color="black"),
+          axis.title.x = element_blank(),
+          legend.position='none')+
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))+
+    scale_x_discrete(labels = c("Ctrl","COVID"))+
+    geom_signif(annotations = anno_sig[i],
+                y_position = max(data$gene)+0.5,
+                xmin = 1,
+                xmax = 2,
+                tip_length = 0)
+}
+
+CombinePlots(plots_violins)
+
+library(randomcoloR)
+# VCAM1在不同细胞系中的表达
+VlnPlot(sce_harmony, features = "VCAM1", slot = "c", log = TRUE)
+# 不同分组VCAM1在细胞系中的表达
+sce_harmony <- subset(x = sce_harmony, subset = group != "COVID_HIV")
+cols <- randomColor(count = 3)
+cols <- c("#68e88a","#5531af")
+DotPlot(sce_harmony, features = c("VCAM1"))
+DotPlot(sce_harmony, features = c("VCAM1"), split.by = "group",cols = cols)+NoLegend()
+DotPlot(subset(x = sce_harmony, idents = c("End","Mes")), 
+        features = c("VCAM1"), split.by = "group",cols = cols)+NoLegend()
+# 不同分组VCAM1在PCA中的表达
+FeaturePlot(subset(x = sce_harmony, idents = c("End","Mes")), features = c("VCAM1"),split.by = "group",label = T)
+
+# ----脑卒SNP----
+IS_SNP <- fread("./Ischemic_stroke_SNP.tsv")
+IS_SNP_gene <- IS_SNP$mappedGenes[IS_SNP$pValue<=9*10^-6]
+IS_SNP_gene <- unique(as.character(str_split_fixed(IS_SNP_gene,",",3)))
+
+# ----差异分析----
+# 循环比较不同细胞类型不同组别之间的差异
+sce_harmony$celltype = Idents(sce_harmony)
+sce_harmony$group
+
+sce <- sce_harmony
+Idents(sce) = sce$group
+table(Idents(sce))
+
+degs <- list()
+for (j in unique(sce$celltype)){
+  k=1
+  for (i in 1:length(levels(sce))){
+    while (k<=length(levels(sce))){
+      if(k!=i){
+        degs[[paste0(j,"_",levels(sce)[i],"_",levels(sce)[k])]] <- 
+          data.frame(FindMarkers(sce[,sce$celltype==j],ident.1 = levels(sce)[k],
+                                 ident.2 = levels(sce)[i]))
+      }
+      k <- k+1
+    }
+  }
+}
+save(degs,file="./deg.rdata")
+load("./deg.rdata")
+degs[["End_Ctrl_COVID"]]["JUN",] # RARB、JUN
+rownames(degs[["End_Ctrl_COVID"]])[grepl("^RAF",rownames(degs[["End_Ctrl_COVID"]]))]
+
+# # x=degs[[1]]
+# # do.call(rbind,lapply(degs, function(x){
+# #   table(x$avg_log2FC > 0)
+# }))
+
+# ----脑卒SNP出图----
+deg_pvalue <- data.frame(IS_SNP_gene[!IS_SNP_gene%in%c("ARHGAP21","ADGRL3","AUTS2","GALNT13","HDAC9","JMJD1C",
+                                                       "NCAM2","PLCB4","SORBS2","SOX5")])
+colnames(deg_pvalue)[1] <- "gene"
+deg_FC <- data.frame(IS_SNP_gene)
+colnames(deg_FC)[1] <- "gene"
+
+for (i in 1:length(degs)){
+  for(j in 1:nrow(deg_pvalue)){
+    if(!deg_pvalue$gene[j]%in%rownames(degs[[i]])){
+      deg_pvalue[j,names(degs)[i]] <- 1
+      deg_FC[j,names(degs)[i]] <- 0
+    } else{
+      deg_pvalue[j,names(degs)[i]] <- degs[[i]]$p_val[rownames(degs[[i]])%in%deg_pvalue$gene[j]]
+      deg_FC[j,names(degs)[i]] <- degs[[i]]$avg_log2FC[rownames(degs[[i]])%in%deg_pvalue$gene[j]]
+    }
+  }
+}
+
+deg_pvalue <- na.omit(deg_pvalue[apply(deg_pvalue[,-1], 1, function(x) sum(x < 0.05) >= 0.3*ncol(deg_pvalue[,-1])),])
+deg_FC <- deg_FC[rownames(deg_FC)%in%rownames(deg_pvalue),]
+rownames(deg_pvalue) <- deg_pvalue$gene
+deg_pvalue <- deg_pvalue[,-1]
+colnames(deg_pvalue) <- str_split_fixed(colnames(deg_pvalue),"_",3)[,1]
+rownames(deg_FC) <- deg_FC$gene
+deg_FC <- deg_FC[,-1]
+colnames(deg_FC) <- str_split_fixed(colnames(deg_FC),"_",3)[,1]
+
+deg_pvalue_1 <- deg_pvalue %>% as.data.frame()#以行缩放
+deg_pvalue_1 <- deg_pvalue_1%>% mutate(deg_pvalue=row.names(.)) %>% melt()#转化为ggplot画图需要的长列表
+
+deg_FC_1 <- deg_FC %>% as.data.frame()#以行缩放
+deg_FC_1 <- deg_FC_1%>% mutate(deg_pvalue=row.names(.)) %>% melt()#转化为ggplot画图需要的长列表
+
+deg_pvalue_1[,"FC"] <- deg_FC_1$value
+colnames(deg_pvalue_1) <- c("variable","cell_type","pvalue","Fc_value")
+dat <- deg_pvalue_1
+dat$pvalue[dat$pvalue<0.0001] <- 0.0001
+dat$pvalue[dat$pvalue>0.05] <- NA
+dat$Fc_value[dat$Fc_value>round(max(dat$Fc_value))] <- round(max(dat$Fc_value))
+dat$Fc_value[dat$Fc_value<round(min(dat$Fc_value))] <- round(min(dat$Fc_value))
+
+ggplot(dat,aes(x=cell_type,y=variable))+
+  geom_point(aes(size=-log2(`pvalue`),
+                 color=`Fc_value`))+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        axis.text.x=element_text(angle=45,hjust = 1,vjust=0.5))+
+  #scale_color_gradient(low="blue",high="red")+
+  labs(x=NULL,y=NULL)+
+  guides(size=guide_legend(order=3))+
+  scale_color_gradient2(limits = c(round(min(dat$Fc_value)), round(max(dat$Fc_value))), # 数据上下限
+                       breaks =  seq(from=round(min(dat$Fc_value)), to=round(max(dat$Fc_value)), by=1), # 分段点
+                       low = "blue", # 下限颜色
+                       mid = "white", # 中值颜色
+                       high = "red", # 上限颜色
+                       midpoint = 0)  # 中点值
+
+# ----血脑屏障marker出图----
+rownames(sce_harmony)[grepl("^TGF",rownames(sce_harmony))]
+BB_marker <- c("PDGFRB","LRP6","ICAM1","CLDN5","HIF1A","HMGB1","IL15","IL18","IFITM3","STAT3","C1S","C3",
+               rownames(sce_harmony)[grepl("^HSP",rownames(sce_harmony))])
+{
+deg_pvalue <- data.frame(BB_marker)
+colnames(deg_pvalue)[1] <- "gene"
+deg_FC <- data.frame(BB_marker)
+colnames(deg_FC)[1] <- "gene"
+
+for (i in 1:length(degs)){
+  for(j in 1:nrow(deg_pvalue)){
+    if(!deg_pvalue$gene[j]%in%rownames(degs[[i]])){
+      deg_pvalue[j,names(degs)[i]] <- 1
+      deg_FC[j,names(degs)[i]] <- 0
+    } else{
+      deg_pvalue[j,names(degs)[i]] <- degs[[i]]$p_val[rownames(degs[[i]])%in%deg_pvalue$gene[j]]
+      deg_FC[j,names(degs)[i]] <- degs[[i]]$avg_log2FC[rownames(degs[[i]])%in%deg_pvalue$gene[j]]
+    }
+  }
+}
+
+deg_pvalue <- na.omit(deg_pvalue[apply(deg_pvalue[,-1], 1, function(x) sum(x < 0.05) >0),])
+deg_FC <- deg_FC[rownames(deg_FC)%in%rownames(deg_pvalue),]
+rownames(deg_pvalue) <- deg_pvalue$gene
+deg_pvalue <- deg_pvalue[,-1]
+colnames(deg_pvalue) <- str_split_fixed(colnames(deg_pvalue),"_",3)[,1]
+rownames(deg_FC) <- deg_FC$gene
+deg_FC <- deg_FC[,-1]
+colnames(deg_FC) <- str_split_fixed(colnames(deg_FC),"_",3)[,1]
+
+deg_pvalue_1 <- deg_pvalue %>% as.data.frame()#以行缩放
+deg_pvalue_1 <- deg_pvalue_1%>% mutate(deg_pvalue=row.names(.)) %>% melt()#转化为ggplot画图需要的长列表
+
+deg_FC_1 <- deg_FC %>% as.data.frame()#以行缩放
+deg_FC_1 <- deg_FC_1%>% mutate(deg_pvalue=row.names(.)) %>% melt()#转化为ggplot画图需要的长列表
+
+deg_pvalue_1[,"FC"] <- deg_FC_1$value
+colnames(deg_pvalue_1) <- c("variable","cell_type","pvalue","Fc_value")
+dat <- deg_pvalue_1
+dat$pvalue[dat$pvalue<0.0001] <- 0.0001
+dat$pvalue[dat$pvalue>0.05] <- NA
+dat$Fc_value[dat$Fc_value>round(max(dat$Fc_value))] <- round(max(dat$Fc_value))
+dat$Fc_value[dat$Fc_value<round(min(dat$Fc_value))] <- round(min(dat$Fc_value))
+
+ggplot(dat,aes(x=cell_type,y=variable))+
+  geom_point(aes(size=-log2(`pvalue`),
+                 color=`Fc_value`))+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        axis.text.x=element_text(angle=45,hjust = 1,vjust=0.5))+
+  #scale_color_gradient(low="blue",high="red")+
+  labs(x=NULL,y=NULL)+
+  guides(size=guide_legend(order=3))+
+  scale_color_gradient2(limits = c(round(min(dat$Fc_value)), round(max(dat$Fc_value))), # 数据上下限
+                        breaks =  seq(from=round(min(dat$Fc_value)), to=round(max(dat$Fc_value)), by=1), # 分段点
+                        low = "blue", # 下限颜色
+                        mid = "white", # 中值颜色
+                        high = "red", # 上限颜色
+                        midpoint = 0)  # 中点值
+}
+# ----------6、细胞通讯-------- 
+library(CellChat)
+library(patchwork)
+
+# ----6.1、CellChat对象的数据输入、处理及初始化----
+# 设置配体受体交互数据库
+Ctrl <- createCellChat(object = subset(x = sce_harmony, subset = group == "Ctrl"),group.by = "cell_type")
+COVID <- createCellChat(object = subset(x = sce_harmony, subset = group == "COVID"),group.by = "cell_type")
+
+cellchat <- COVID
+{
+# 设置配体受体交互数据库
+CellChatDB <- CellChatDB.human # use CellChatDB.mouse if running on mouse data
+# showDatabaseCategory(CellChatDB)
+dplyr::glimpse(CellChatDB$interaction)
+CellChatDB.use <- CellChatDB # simply use the default CellChatDB
+# CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # use Secreted Signaling
+cellchat@DB <- CellChatDB.use
+
+# 预处理用于细胞通信分析的表达数据
+cellchat <- subsetData(cellchat) # subset the expression data of signaling genes for saving computation cost
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.human)
+
+# ----6.2、细胞通信网络的推断----
+# 计算通信概率并推断cellchat网络
+cellchat <- computeCommunProb(cellchat, raw.use = TRUE)
+# 如果在某些细胞群中只有少量细胞，则过滤掉细胞与细胞之间的通信
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+save(cellchat,file="./cellchat.rdata")
+
+# 提取推断的cellchat网络作为数据框架
+# df.net <- subsetCommunication(cellchat)
+# 返回一个数据框架，该数据框架由配体/受体级别的所有推断细胞通信组成。设置slot.name = "netP"可以在信号通路级别访问推断的通信
+# df.net <- subsetCommunication(cellchat, sources.use = c(1,2), targets.use = c(4,5))
+# 将推断的细胞-细胞通信从细胞组1和2发送到细胞组4和5。
+# df.net <- subsetCommunication(cellchat, signaling = c("WNT", "TGFb"))
+# 通过向WNT和TGFb发出信号来调节推断的细胞通信。
+
+# 在信号通路级别推断细胞-细胞通信
+cellchat <- computeCommunProbPathway(cellchat)
+
+# 计算整合的细胞通信网络
+cellchat <- aggregateNet(cellchat)
+# 我们还可以可视化整合的细胞通信网络。例如，使用圆图显示任意两个细胞组之间的相互作用次数或总交互强度（比重）
+# groupSize <- as.numeric(table(cellchat@idents))
+# par(mfrow = c(1,2), xpd=TRUE)
+# netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+# netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+# 由于细胞通信网络复杂，我们可以检查每个细胞组发送的信号。在这里，我们还控制参数edge.weight.max，以便我们可以比较不同网络之间的边缘权重
+# mat <- cellchat@net$weight
+# par(mfrow = c(3,4), xpd=TRUE)
+# for (i in 1:nrow(mat)) {
+#   mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+#   mat2[i, ] <- mat[i, ]
+#   netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+# }
+
+# ----6.3、细胞通信网络的可视化----
+# 使用层次结构图、圆图或和弦图可视化每个信号通路
+# pathways.show <- c("CXCL") 
+# # Hierarchy plot
+# # Here we define `vertex.receive` so that the left portion of the hierarchy plot shows signaling to fibroblast and the right portion shows signaling to immune cells 
+# vertex.receiver = seq(1,4) # a numeric vector. 
+# netVisual_aggregate(cellchat, signaling = pathways.show,  vertex.receiver = vertex.receiver)
+
+# Circle plot
+# par(mfrow=c(1,1))
+# netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+# 
+# # Chord diagram
+# par(mfrow=c(1,1))
+# netVisual_aggregate(cellchat, signaling = pathways.show, layout = "chord")
+# # Note: The first link end is drawn out of sector 'Inflam. FIB'
+
+# Heatmap
+# par(mfrow=c(1,1))
+# netVisual_heatmap(cellchat, signaling = pathways.show, color.heatmap = "Reds")
+# # Do heatmap based on a single object
+# 
+# # Chord diagram
+# group.cellType <- c(rep("FIB", 4), rep("DC", 4), rep("TC", 4)) # grouping cell clusters into fibroblast, DC and TC cells
+# names(group.cellType) <- levels(cellchat@idents)
+# netVisual_chord_cell(cellchat, signaling = pathways.show, group = group.cellType, title.name = paste0(pathways.show, " signaling network"))
+# # Plot the aggregated cell-cell communication network at the signaling pathway level
+# # Note: The first link end is drawn out of sector 'Inflam. FIB'.
+#
+# netAnalysis_contribution(cellchat, signaling = pathways.show)
+
+# # 计算每个配体受体对整体信号通路的贡献，并可视化由单个配体受体对调节的细胞通信
+# netAnalysis_contribution(cellchat, signaling = pathways.show)
+# 
+# pairLR.CXCL <- extractEnrichedLR(cellchat, signaling = pathways.show, geneLR.return = FALSE)
+# LR.show <- pairLR.CXCL[1,] # show one ligand-receptor pair
+# # Hierarchy plot
+# vertex.receiver = seq(1,4) # a numeric vector
+# netVisual_individual(cellchat, signaling = pathways.show,  pairLR.use = LR.show, vertex.receiver = vertex.receiver)
+# 
+# # Circle plot
+# netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "circle")
+# netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "chord")
+# 
+# # 自动保存所有推断网络的模块以进行快速探索
+# # Access all the signaling pathways showing significant communications
+# pathways.show.all <- cellchat@netP$pathways
+# # check the order of cell identity to set suitable vertex.receiver
+# levels(cellchat@idents)
+# vertex.receiver = seq(1,4)
+# for (i in 1:length(pathways.show.all)) {
+#   # Visualize communication network associated with both signaling pathway and individual L-R pairs
+#   netVisual(cellchat, signaling = pathways.show.all[i], vertex.receiver = vertex.receiver, layout = "hierarchy")
+#   # Compute and visualize the contribution of each ligand-receptor pair to the overall signaling pathway
+#   gg <- netAnalysis_contribution(cellchat, signaling = pathways.show.all[i])
+#   ggsave(filename=paste0(pathways.show.all[i], "_L-R_contribution.pdf"), plot=gg, width = 3, height = 2, units = 'in', dpi = 300)
+# }
+# 
+# # 可视化由多个配体受体或信号通路调节的细胞通信
+# # 我们还可以使用netVisual_bubble显示从某些细胞组到其他细胞组的所有重要相互作用（L-R对）
+# netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:11), remove.isolate = FALSE)
+# #> Comparing communications on a single object
+# 
+# # show all the significant interactions (L-R pairs) associated with certain signaling pathways
+# netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:11), signaling = c("CCL","CXCL"), remove.isolate = FALSE)
+# #> Comparing communications on a single object
+# 
+# # 和弦图
+# # show all the significant interactions (L-R pairs) from some cell groups (defined by 'sources.use') to other cell groups (defined by 'targets.use')
+# # show all the interactions sending from Inflam.FIB
+# netVisual_chord_gene(cellchat, sources.use = 4, targets.use = c(5:11), lab.cex = 0.5,legend.pos.y = 30)
+# #> Note: The first link end is drawn out of sector 'MIF'.
+# 
+# # show all the interactions received by Inflam.DC
+# netVisual_chord_gene(cellchat, sources.use = c(1,2,3,4), targets.use = 8, legend.pos.x = 15)
+# 
+# # show all the significant interactions (L-R pairs) associated with certain signaling pathways
+# netVisual_chord_gene(cellchat, sources.use = c(1,2,3,4), targets.use = c(5:11), signaling = c("CCL","CXCL"),legend.pos.x = 8)
+# #> Note: The second link end is drawn out of sector 'CXCR4 '.
+# #> Note: The first link end is drawn out of sector 'CXCL12 '.
+# 
+# # show all the significant signaling pathways from some cell groups (defined by 'sources.use') to other cell groups (defined by 'targets.use')
+# netVisual_chord_gene(cellchat, sources.use = c(1,2,3,4), targets.use = c(5:11), slot.name = "netP", legend.pos.x = 10)
+# #> Note: The second link end is drawn out of sector ' '.
+# #> Note: The first link end is drawn out of sector 'MIF'.
+# #> Note: The second link end is drawn out of sector ' '.
+# #> Note: The first link end is drawn out of sector 'CXCL '
+# 
+# # 使用小提琴/点图绘制信号基因表达分布
+# plotGeneExpression(cellchat, signaling = "CXCL")
+# #> Registered S3 method overwritten by 'spatstat':
+# #>   method     from
+# #>   print.boxx cli
+# #> Scale for 'y' is already present. Adding another scale for 'y', which will
+# #> replace the existing scale.
+# #> Scale for 'y' is already present. Adding another scale for 'y', which will
+# #> replace the existing scale.
+# #> Scale for 'y' is already present. Adding another scale for 'y', which will
+# #> replace the existing scale.
+# 
+# # 默认情况下，用户可以通过plotGeneExpression只显示与推断的重要通信相关的信号基因的表达。
+# plotGeneExpression(cellchat, signaling = "CXCL", enriched.only = FALSE)
+
+# ----6.4、细胞通信网络系统分析----
+# 识别细胞组的信号角色（例如，占主导地位的发送器、接收器）以及主要贡献信号
+# 计算和可视化网络中心分数
+# Compute the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") # the slot 'netP' means the inferred intercellular communication network of signaling pathways
+# Visualize the computed centrality scores using heatmap, allowing ready identification of major signaling roles of cell groups
+# netAnalysis_signalingRole_network(cellchat, signaling = pathways.show, width = 8, height = 2.5, font.size = 10)
+
+# 在 2D 空间中可视化占主导地位的发送器（源）和接收器（目标）
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# gg1 <- netAnalysis_signalingRole_scatter(cellchat)
+# #> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# # Signaling role analysis on the cell-cell communication networks of interest
+# gg2 <- netAnalysis_signalingRole_scatter(cellchat, signaling = c("CXCL", "CCL"))
+# #> Signaling role analysis on the cell-cell communication network from user's input
+# gg1 + gg2
+
+# 识别对某些细胞组的传出或传入信号贡献最大的信号
+# # Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing")
+# ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming")
+# ht1 + ht2
+# # Signaling role analysis on the cell-cell communication networks of interest
+# ht <- netAnalysis_signalingRole_heatmap(cellchat, signaling = c("CXCL", "CCL"))
+
+# 确定全局通信模式，探索多个细胞类型和信号通路如何协调在一起
+# 识别和可视化分泌细胞的传出通信模式
+library(NMF)
+#> Loading required package: pkgmaker
+#> Loading required package: registry
+#> Loading required package: rngtools
+#> Loading required package: cluster
+#> NMF - BioConductor layer [OK] | Shared memory capabilities [NO: bigmemory] | Cores 15/16
+#>   To enable shared memory capabilities, try: install.extras('
+#> NMF
+#> ')
+#> 
+#> Attaching package: 'NMF'
+#> The following objects are masked from 'package:igraph':
+#> 
+#>     algorithm, compare
+library(ggalluvial)
+
+# selectK(cellchat, pattern = "outgoing")
+
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing", k = nPatterns)
+
+# river plot
+# netAnalysis_river(cellchat, pattern = "outgoing")
+#> Please make sure you have load `library(ggalluvial)` when running this function
+
+# dot plot
+# netAnalysis_dot(cellchat, pattern = "outgoing")
+
+# 识别和可视化目标细胞的传入通信模式
+# selectK(cellchat, pattern = "incoming")
+nPatterns = 4
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "incoming", k = nPatterns)
+# river plot
+# netAnalysis_river(cellchat, pattern = "incoming")
+# #> Please make sure you have load `library(ggalluvial)` when running this function
+# # dot plot
+# netAnalysis_dot(cellchat, pattern = "incoming")
+
+# 信号网络的多重和分类学习分析
+# 根据信号组的功能相似性识别信号组
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+save(cellchat,file="./cellchat.rdata")
+
+cellchat <- netEmbedding(cellchat, type = "functional",umap.method = c("uwot"))
+#> Manifold learning of the signaling networks for a single dataset
+cellchat <- netClustering(cellchat, type = "functional",do.parallel = F)
+#> Classification learning of the signaling networks for a single dataset
+# Visualization in 2D-space
+netVisual_embedding(cellchat, type = "functional", label.size = 3.5)
+# netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+
+# 基于结构相似性识别信号组
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural",umap.method = c("uwot"))
+#> Manifold learning of the signaling networks for a single dataset
+cellchat <- netClustering(cellchat, type = "structural",do.parallel = F)
+#> Classification learning of the signaling networks for a single dataset
+# Visualization in 2D-space
+netVisual_embedding(cellchat, type = "structural", label.size = 3.5)
+
+netVisual_embeddingZoomIn(cellchat, type = "structural", nCol = 2)
+
+# ----6.5、保存cellchat对象----
+COVID <- cellchat
+saveRDS(COVID, file = "COVID.rds")
+}
+
+# ----------7、不同组细胞通讯-------- 
+library(RColorBrewer)
+rm(list=ls())
+Ctrl <- readRDS("~/R/R_project/新冠与脑卒/GSE164485/Ctrl.rds")
+COVID <- readRDS("~/R/R_project/新冠与脑卒/GSE164485/COVID.rds")
+
+# 合并数据集
+object.list <- list(Ctrl = Ctrl, COVID = COVID)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+cellchat
+#> An object of class CellChat created from a merged object with multiple datasets 
+#>  555 signaling genes.
+#>  7563 cells.
+
+# ----7.1、比较交互总数和交互强度----
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2),color.use = c("#4DBBD5CC","#E64B35CC")) # 数量
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight",color.use = c("#4DBBD5CC","#E64B35CC")) # 强度
+gg1 + gg2
+
+# ----7.2、比较不同细胞群之间的相互作用数量和强度----
+colors <- colorRampPalette(brewer.pal(8,'Set2'))(15)
+group <- unique(cellchat@meta$cell_type)
+group_colors <- setNames(colors,group)
+
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T,color.use = group_colors)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight",color.use = group_colors)
+# 两个数据集之间细胞通信网络中交互或交互强度的差异数可以使用圆图可视化， 与第一个数据集相比，[红色]（或[蓝色]边表示信号在第二个数据集中增加或[减少]）。
+
+# 我们还可以使用热图在更大的细节中显示交互的差异数或交互强度。顶部彩色条形图表示热图（传入信号）中显示的列值的总和。右边的彩色条形图表示一行值（传出信号）的总和。在色条中红色或蓝色表示第二个数据集中与第一个数据集相比增加或[减少]信号。
+gg1 <- netVisual_heatmap(cellchat,color.use = group_colors)
+#> Do heatmap based on a merged object
+gg2 <- netVisual_heatmap(cellchat, measure = "weight",color.use = group_colors)
+#> Do heatmap based on a merged object
+gg1 + gg2
+
+# 为了更好地控制不同数据集中推断网络的节点大小和边缘权重，我们计算每个细胞组的最大细胞数量以及所有数据集中交互（或交互权重）的最大数量。
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+
+# 不同细胞类型之间相互作用或交互强度的差异
+group.cellType <- c("Astrocytes","Astrocytes","Endothelial cells","Ependymal cells","Epithelial cells",
+                    "neurons","neurons","Lymphocyte","Mesenchymal cells",
+                    "Microglial cells","Monocytes","Oligodendrocytes","Oligodendrocyte progenitor cell",
+                    "Pericytes","Pericytes")
+group.cellType <- c("others","others","Endothelial cells","others","others",
+                    "others","others","Lymphocyte","Mesenchymal cells",
+                    "others","Monocytes","others","others",
+                    "Pericytes","Pericytes")
+group.cellType <- factor(group.cellType, levels = unique(group.cellType))
+object.list <- lapply(object.list, function(x) {mergeInteractions(x, group.cellType)})
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+#> Merge the following slots: 'data.signaling','net', 'netP','meta', 'idents', 'var.features' , 'DB', and 'LR'.
+weight.max <- getMaxWeight(object.list, slot.name = c("idents", "net", "net"), attribute = c("idents","count", "count.merged"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count.merged, weight.scale = T, label.edge= T, edge.weight.max = weight.max[3], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]),color.use = group_colors)
+}
+
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "count.merged", label.edge = T,color.use = group_colors)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight.merged", label.edge = T,color.use = group_colors)
+
+# 比较 2D 空间中的主要来源和目标
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+patchwork::wrap_plots(plots = gg)
+
+# ----7.3、识别保守和环境特异的信号通路----
+# 基于结构相似性识别信号组
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "functional")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "functional",umap.method = c("uwot"))
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "functional",do.parallel = F)
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "functional", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+
+# 基于结构相似性识别信号组
+cellchat <- computeNetSimilarityPairwise(cellchat, type = "structural")
+#> Compute signaling network similarity for datasets 1 2
+cellchat <- netEmbedding(cellchat, type = "structural",umap.method = c("uwot"))
+#> Manifold learning of the signaling networks for datasets 1 2
+cellchat <- netClustering(cellchat, type = "structural",do.parallel = F)
+#> Classification learning of the signaling networks for datasets 1 2
+# Visualization in 2D-space
+netVisual_embeddingPairwise(cellchat, type = "structural", label.size = 3.5)
+#> 2D visualization of signaling networks from datasets 1 2
+
+# 计算和可视化通路距离
+rankSimilarity(cellchat, type = "functional")
+#> Compute the distance of signaling networks between datasets 1 2
+
+# 比较每个信号通路的整体信息流
+gg1 <- rankNet(cellchat, mode = "comparison", stacked = T, do.stat = TRUE,color.use = c("#4DBBD5CC","#E64B35CC")) + NoLegend()
+gg2 <- rankNet(cellchat, mode = "comparison", stacked = F, do.stat = TRUE,color.use = c("#4DBBD5CC","#E64B35CC"))
+gg1 + gg2
+
+# 比较与每个细胞群相关的传出（或传入）信号
+library(ComplexHeatmap)
+i = 1
+# combining all the identified signaling pathways from different datasets 
+pathway.union <- c(setdiff(object.list[[i+1]]@netP$pathways, object.list[[i]]@netP$pathways),
+                   setdiff(object.list[[i]]@netP$pathways, object.list[[i+1]]@netP$pathways))
+pathway.union <- unique(gg2[["data"]]$name[gg2[["data"]]$pvalues<=0.001])
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i], width = 8, height = 10)
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "outgoing", signaling = pathway.union, title = names(object.list)[i+1], width = 8, height = 10)
+draw(ht1 + ht2)
+
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]], pattern = "incoming", signaling = pathway.union, title = names(object.list)[i], width = 8, height = 10, color.heatmap = "GnBu")
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "incoming", signaling = pathway.union, title = names(object.list)[i+1], width = 8, height = 10, color.heatmap = "GnBu")
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+
+ht1 = netAnalysis_signalingRole_heatmap(object.list[[i]], pattern = "all", signaling = pathway.union, title = names(object.list)[i], width = 5, height = 6, color.heatmap = "OrRd")
+ht2 = netAnalysis_signalingRole_heatmap(object.list[[i+1]], pattern = "all", signaling = pathway.union, title = names(object.list)[i+1], width = 5, height = 6, color.heatmap = "OrRd")
+draw(ht1 + ht2, ht_gap = unit(0.5, "cm"))
+
+cellchat@netP[[2]]$pathways
+levels(cellchat@idents[[2]])   
+vertex.receiver = c(1,3,8,9,11,15) 
+
+pathways.show <- c("NGL") 
+# ICAM、VCAM、ITGB2、CD226、CCL和COMPLEMENT
+netVisual_aggregate(object.list[[2]], signaling = pathways.show,  
+                    vertex.receiver = vertex.receiver,layout = "hierarchy",
+                    color.use = group_colors)
+
+
+# ----7.4、识别上调和下调的信号配体对----
+netVisual_bubble(cellchat, sources.use = c("LM","End"), targets.use = c("LM","End"),  comparison = c(1, 2), angle.x = 45)
+#> Comparing communications on a merged object
+
+gg1 <- netVisual_bubble(cellchat, sources.use = c("LM"), targets.use = c("End","Mes"),  
+                        comparison = c(1, 2), max.dataset = 2, 
+                        title.name = "Increased signaling in COVID", 
+                        angle.x = 45, remove.isolate = T,
+                        color.heatmap = 'viridis',
+                        n.colors = 100)
+
+#> Comparing communications on a merged object
+gg2 <- netVisual_bubble(cellchat, sources.use = c("LM"), targets.use = c("End","Mes"),  
+                        comparison = c(1, 2), max.dataset = 1, 
+                        title.name = "Decreased signaling in COVID", 
+                        angle.x = 45, remove.isolate = T,
+                        color.heatmap = 'viridis',
+                        n.colors = 100)
+#> Comparing communications on a merged object
+gg1 + theme(axis.text = element_text(size = 12), 
+            axis.title = element_text(size = 14), 
+            title = element_text(size = 16), 
+            legend.text = element_text(size = 10))+ 
+  gg2 + theme(axis.text = element_text(size = 12), 
+                     axis.title = element_text(size = 14), 
+                     title = element_text(size = 16), 
+                     legend.text = element_text(size = 10))
+
+# define a positive dataset, i.e., the dataset with positive fold change against the other dataset
+pos.dataset = "COVID"
+# define a char name used for storing the results of differential expression analysis
+features.name = pos.dataset
+# perform differential expression analysis
+cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = pos.dataset, features.name = features.name, only.pos = FALSE, thresh.pc = 0.1, thresh.fc = 0.1, thresh.p = 1)
+#> Use the joint cell labels from the merged CellChat object
+# map the results of differential expression analysis onto the inferred cell-cell communications to easily manage/subset the ligand-receptor pairs of interest
+net <- netMappingDEG(cellchat, features.name = features.name)
+# extract the ligand-receptor pairs with upregulated ligands in COVID
+net.up <- subsetCommunication(cellchat, net = net, datasets = "COVID",ligand.logFC = 0.2, receptor.logFC = NULL)
+# extract the ligand-receptor pairs with upregulated ligands and upregulated recetptors in NL, i.e.,downregulated in LS
+net.down <- subsetCommunication(cellchat, net = net, datasets = "COVID",ligand.logFC = -0.1, receptor.logFC = -0.1)
+
+# 由于信号基因在多亚单位中可能很复杂，我们可以使用net.upnet.down进一步的来获得单个信号基因。
+gene.up <- extractGeneSubsetFromPair(net.up, cellchat)
+gene.down <- extractGeneSubsetFromPair(net.down, cellchat)
+
+pairLR.use.up = net.up[, "interaction_name", drop = F]
+gg1 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.up, sources.use = c("End"), targets.use = c("Mes","LM","Mo","Peri2"), comparison = c(1, 2),  angle.x = 45, remove.isolate = T,title.name = paste0("Up-regulated signaling in ", names(object.list)[2]),
+                        color.text = c("#4DBBD5CC","#E64B35CC"))
+#> Comparing communications on a merged object
+pairLR.use.down = net.down[, "interaction_name", drop = F]
+gg2 <- netVisual_bubble(cellchat, pairLR.use = pairLR.use.down, sources.use = c("End"), targets.use = c("Mes","LM","Mo","Peri2"), comparison = c(1, 2),  angle.x = 45, remove.isolate = T,title.name = paste0("Down-regulated signaling in ", names(object.list)[2]),
+                        color.text = c("#4DBBD5CC","#E64B35CC"))
+#> Comparing communications on a merged object
+gg1 + gg2
+
+# Chord diagram
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_chord_gene(object.list[[2]], sources.use = 4, targets.use = c("End","Mes"), slot.name = 'net', net = net.up, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Up-regulated signaling in ", names(object.list)[2]))
+#> Note: The first link end is drawn out of sector 'MIF'.
+netVisual_chord_gene(object.list[[1]], sources.use = 4, targets.use = c("End","Mes"), slot.name = 'net', net = net.down, lab.cex = 0.8, small.gap = 3.5, title.name = paste0("Down-regulated signaling in ", names(object.list)[2]))
+
+# ----7.5、使用层次结构图、圆图或和弦图可视比较细胞-细胞通信-----
+cellchat@netP[[2]]$pathways
+pathways.show <- c("NT") 
+weight.max <- getMaxWeight(object.list, slot.name = c("netP"), attribute = pathways.show) # control the edge weights across different datasets
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  try(netVisual_aggregate(object.list[[i]], signaling = pathways.show, layout = "circle", edge.weight.max = weight.max[1], edge.width.max = 10, signaling.name = paste(pathways.show, names(object.list)[i])))
+}
+
+par(mfrow = c(1,2), xpd=TRUE)
+ht <- list()
+for (i in 1:length(object.list)) {
+  ht[[i]] <- netVisual_heatmap(object.list[[i]], signaling = pathways.show, color.heatmap = "Reds",title.name = paste(pathways.show, "signaling ",names(object.list)[i]))
+}
+#> Do heatmap based on a single object 
+#> 
+#> Do heatmap based on a single object
+ComplexHeatmap::draw(ht[[1]] + ht[[2]], ht_gap = unit(0.5, "cm"))
+
+# Chord diagram
+pathways.show <- c("NT") 
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_aggregate(object.list[[i]], signaling = pathways.show, layout = "chord", signaling.name = paste(pathways.show, names(object.list)[i]))
+}
+#> Note: The first link end is drawn out of sector 'Inflam. FIB'.
+
+# Chord diagram
+group.cellType <- c(rep("FIB", 4), rep("DC", 4), rep("TC", 4)) # grouping cell clusters into fibroblast, DC and TC cells
+names(group.cellType) <- levels(object.list[[1]]@idents)
+pathways.show <- c("CXCL") 
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_cell(object.list[[i]], signaling = pathways.show, group = group.cellType, title.name = paste0(pathways.show, " signaling network - ", names(object.list)[i]))
+}
+#> Plot the aggregated cell-cell communication network at the signaling pathway level
+#> Plot the aggregated cell-cell communication network at the signaling pathway level
+#> Note: The first link end is drawn out of sector 'Inflam. FIB'.
+
+par(mfrow = c(1, 2), xpd=TRUE)
+# compare all the interactions sending from Inflam.FIB to DC cells
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = 4, targets.use = c(5:8), lab.cex = 0.5, title.name = paste0("Signaling from Inflam.FIB - ", names(object.list)[i]))
+}
+
+# compare all the interactions sending from fibroblast to inflamatory immune cells
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = c(1,2, 3, 4), targets.use = c(8,10),  title.name = paste0("Signaling received by Inflam.DC and .TC - ", names(object.list)[i]), legend.pos.x = 10)
+}
+
+# show all the significant signaling pathways from fibroblast to immune cells
+par(mfrow = c(1, 2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_chord_gene(object.list[[i]], sources.use = c(1,2,3,4), targets.use = c(5:11),slot.name = "netP", title.name = paste0("Signaling pathways sending from fibroblast - ", names(object.list)[i]), legend.pos.x = 10)
+}
+#> Note: The second link end is drawn out of sector ' '.
+#> Note: The first link end is drawn out of sector 'MIF'.
+#> Note: The second link end is drawn out of sector ' '.
+#> Note: The first link end is drawn out of sector 'CXCL '.
+ 
+# ----7.6、比较不同数据集之间的信号基因表达分布----
+cellchat@meta$datasets = factor(cellchat@meta$datasets, levels = c("Ctrl", "COVID")) # set factor level
+plotGeneExpression(cellchat, signaling = c("VCAM"), split.by = "datasets", colors.ggplot = T,
+                   color.use = c("#4DBBD5CC","#E64B35CC"),split.plot = TRUE)
+
+plotGeneExpression(cellchat, features = c("ALCAM"), split.by = "datasets", colors.ggplot = T,
+                   color.use = c("#4DBBD5CC","#E64B35CC"),split.plot = TRUE)
+ #> The default behaviour of split.by has changed.
+#> Separate violin plots are now plotted side-by-side.
+#> To restore the old behaviour of a single split violin,
+#> set split.plot = TRUE.
+
+
+saveRDS(cellchat, file = "cellchat_Ctrl_vs_COVID.rds")
+
+# ----8、GSEA功能富集----
+library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+library(pathview)
+library(GOplot)
+library(gridExtra)
+library(ggdendro)
+library(RColorBrewer)
+library(stringi)
+
+
+DEG <- degs[["End_Ctrl_COVID"]]
+
+rownames(DEG)[grepl("^MAPK",rownames(DEG))]
+TF <- c("JUN","NR3C2","ATF7IP","ATF3","MAP3K8","MAP3K5","MAPKAP1",  "MAPK6"  ,  "MAP2" ,  "MAP1LC3B" ,"MAPK10"   ,"MAP7"   ,  "MAPK8IP3")
+DEG[(rownames(DEG)%in%TF)*(DEG$p_val<0.05)==1,]
+
+
+df <- as.data.frame(DEG$avg_log2FC,row.names = rownames(DEG),col.names=colnames(DEG))
+# df <- as.data.frame(DEG2$logFC,row.names = rownames(DEG2),col.names=colnames(DEG2))
+df_id<-bitr(rownames(df), #转换的列是df数据框中的SYMBOL列
+            fromType = "SYMBOL",#需要转换ID类型
+            toType = "ENTREZID",#转换成的ID类型
+            OrgDb = "org.Hs.eg.db")#对应的物种，小鼠的是org.Mm.eg.db
+df_id$SYMBOL[duplicated(df_id$SYMBOL)] #查看依然重复的基因名
+df_id <- df_id%>%distinct(SYMBOL,.keep_all = TRUE) #只保留唯一重复的基因名
+
+df$SYMBOL <- rownames(df)
+df_all<-merge(df,df_id,by="SYMBOL",all=F)#使用merge合并
+head(df_all) #再看看数据
+dim(df_all) #因为有一部分没转换成功，所以数量就少了。
+
+## GAEA
+df_all_sort <- df_all[order(df_all$`DEG$avg_log2FC`, decreasing = T),] # 先按照logFC降序排序
+gene_fc = df_all_sort$`DEG$avg_log2FC` # 把foldchange按照从大到小提取出来
+# df_all_sort <- df_all[order(df_all$`DEG2$logFC`, decreasing = T),]
+# gene_fc = df_all_sort$`DEG2$logFC`
+head(gene_fc)
+names(gene_fc) <- df_all_sort$ENTREZID #给上面提取的foldchange加上对应上ENTREZID
+sort(gene_fc)
+
+#以KEGG Pathway示例
+KEGG <- gseKEGG(gene_fc, organism = "hsa",pvalueCutoff = 0.05, pAdjustMethod = "BH") #具体参数在下面
+# gseKEGG(
+#   geneList,
+#   organism = "hsa",
+#   keyType = "kegg",
+#   exponent = 1,
+#   minGSSize = 10,
+#   maxGSSize = 500,
+#   eps = 1e-10,
+#   pvalueCutoff = 0.05,
+#   pAdjustMethod = "BH",
+#   verbose = TRUE,
+#   use_internal_data = FALSE,
+#   seed = FALSE,
+#   by = "fgsea",
+#   ...
+# )
+
+# 排序及可视化处理
+sortKEGG<-KEGG[order(abs(KEGG$enrichmentScore), decreasing = T),]#按照enrichment score从高到低排序
+head(sortKEGG)
+dim(sortKEGG)
+
+# 结果可视化
+# 全部展示
+gseaplot2(KEGG, "hsa04064", color = "firebrick", rel_heights=c(1, .2, .6))
+#gseaplot2用法
+# gseaplot2(
+#   x, #gseaResult object，即GSEA结果
+#   geneSetID,#富集的ID编号
+#   title = "", #标题
+#   color = "green",#GSEA线条颜色
+#   base_size = 11,#基础字体大小
+#   rel_heights = c(1.5, 0.5, 1),#副图的相对高度
+#   subplots = 1:3, #要显示哪些副图 如subplots=c(1,3) #只要第一和第三个图，subplots=1#只要第一个图
+#   pvalue_table = FALSE, #是否添加 pvalue table
+#   ES_geom = "line" #running enrichment score用先还是用点ES_geom = "dot"
+# )
+#部分展示KEGG
+paths <- sortKEGG$ID
+# 或paths <- c("hsa05330", "hsa05332", "hsa05320", "hsa04940")#选取你需要展示的通路ID
+gseaplot2(KEGG,paths, pvalue_table = T,rel_heights = c(2, 0.5, 0.5))
+ridgeplot(KEGG)
+
+# KEGG弦图
+KEGG@result$ONTOLOGY <- "KEGG"
+circle_kegg <- KEGG@result[,c("ID","Description","ONTOLOGY","p.adjust","core_enrichment")]
+circle_kegg$core_enrichment <- gsub("/",",",circle_kegg$core_enrichment)
+colnames(circle_kegg)<-c( 'ID', 'term','category','adj_pval','genes')
+
+prok <- merge(df[,c("SYMBOL","DEG$avg_log2FC")],df_id,by.x="SYMBOL",by.y="SYMBOL")
+prok[,1] <- prok$ENTREZID
+prok <- prok[,-3]
+colnames(prok)<-c("ID","logFC")
+
+circ <- circle_dat(circle_kegg,prok)
+
+df.k<- df_id
+colnames(df.k)[2] <- "genes"
+circ$genes <- left_join(circ, df.k, by = "genes")$SYMBOL
+
+colnames(df.k)[2] <- "ID"
+prok_symbol<- prok
+prok_symbol$ID <- left_join(prok_symbol, df.k, by = "ID")$SYMBOL
+
+# KEGG圈图
+GSEA_circle <- data.frame(paths)
+GSEA_circle$gene_num.min <- 0
+GSEA_circle$gene_num.max <- sortKEGG$setSize[order(sortKEGG$ID[sortKEGG$ID%in%paths])]
+
+for (i in 1:nrow(GSEA_circle)){
+  
+  if(GSEA_circle$paths[i]%in%c("hsa03030","hsa04110","hsa04137","hsa04140","hsa04270","hsa04730")){
+    GSEA_circle$category[i] <- "Biological_Process"
+  } else(
+    if(grepl("pathway",sortKEGG$Description[sortKEGG$ID%in%GSEA_circle$paths[i]]))
+    {GSEA_circle$category[i] <- "pathway"}
+    else(GSEA_circle$category[i] <- "metabolish")) # category
+  
+  GSEA_circle$gene_num.rich[i] <- circ$count[circ$ID%in%GSEA_circle$paths[i]][1] # gene_num.rich
+  
+  GSEA_circle$Pvalue[i] <- -log10(sortKEGG$p.adjust[sortKEGG$ID%in%GSEA_circle$paths[i]]) # Pvalue
+  
+  GSEA_circle$up.regulated[i] <- sum(circ$logFC[circ$ID%in%GSEA_circle$paths[i]]>0) # UP
+  
+  GSEA_circle$down.regulated[i] <- sum(circ$logFC[circ$ID%in%GSEA_circle$paths[i]]<0) # DOWN
+  
+  GSEA_circle$rich.factor[i] <- sortKEGG$enrichmentScore[sortKEGG$ID%in%GSEA_circle$paths[i]] # enrichmentScore
+  
+  if(GSEA_circle$category[i]=="pathway"){GSEA_circle$color[i] <- "#F7CC13"} 
+  else(if(GSEA_circle$category[i]=="metabolish"){GSEA_circle$color[i] <- "#954572"} 
+       else(GSEA_circle$color[i] <- "#0796E0"))
+}
+
+#以下为GSEA富集分析圈图
+dat <- GSEA_circle
+dat$id <- factor(dat$paths, levels = dat$paths)
+rownames(dat) <- dat$id
+
+pdf('./circlize.pdf', width = 24, height = 12)
+##第一圈，绘制id
+circle_size = unit(1, 'snpc')
+circos.par(gap.degree = 0.5, start.degree = 90)
+plot_data <- dat[c('id', 'gene_num.min', 'gene_num.max')]
+plot_data <- plot_data[order(dat$category),]
+ko_color <- GSEA_circle$color#各二级分类的颜色和数目
+
+circos.genomicInitialize(plot_data, plotType = NULL, major.by = 1)
+circos.track(
+  ylim = c(0, 1), track.height = 0.05, bg.border = NA, bg.col = ko_color,
+  panel.fun = function(x, y) {
+    ylim = get.cell.meta.data('ycenter')#ylim、xlim
+    xlim = get.cell.meta.data('xcenter')
+    sector.name = get.cell.meta.data('sector.index')#sector.name
+    circos.axis(h = 'top', labels.cex = 0.4, labels.niceFacing = FALSE)
+    circos.text(xlim, ylim, sector.name, cex = 0.6, niceFacing = FALSE)
+  } )
+
+##第二圈，绘制富集的基因和富集p值
+plot_data <- dat[c('id', 'gene_num.min', 'gene_num.rich', 'Pvalue')]
+label_data <- dat['gene_num.rich']
+p_max <- round(max(dat$Pvalue)) + 1  
+colorsChoice <- colorRampPalette(c('green','red'))
+color_assign <- colorRamp2(breaks = 0:p_max, col = colorsChoice(p_max + 1))
+
+circos.genomicTrackPlotRegion(
+  plot_data, track.height = 0.08, bg.border = NA, stack = TRUE,
+  panel.fun = function(region, value, ...) {
+    circos.genomicRect(region, value, col = color_assign(value[[1]]), border = NA, ...)
+    ylim = get.cell.meta.data('ycenter')  
+    xlim = label_data[get.cell.meta.data('sector.index'),1] / 2
+    sector.name = label_data[get.cell.meta.data('sector.index'),1]
+    circos.text(xlim, ylim, sector.name, cex = 0.6, niceFacing = FALSE,col = 'white')
+  } )
+
+##第三圈，绘制上下调基因
+dat$all.regulated <- dat$up.regulated + dat$down.regulated
+dat$up.proportion <- dat$up.regulated / dat$all.regulated
+dat$down.proportion <- dat$down.regulated / dat$all.regulated
+
+dat$up <- dat$up.proportion * dat$gene_num.max
+plot_data_up <- dat[c('id', 'gene_num.min', 'up')]
+names(plot_data_up) <- c('id', 'start', 'end')
+plot_data_up$type <- 1 
+
+dat$down <- dat$down.proportion * dat$gene_num.max + dat$up
+plot_data_down <- dat[c('id', 'up', 'down')]
+names(plot_data_down) <- c('id', 'start', 'end')
+plot_data_down$type <- 2 
+
+plot_data <- rbind(plot_data_up, plot_data_down)
+label_data <- dat[c('up', 'down', 'up.regulated', 'down.regulated')]
+color_assign <- colorRamp2(breaks = c(1, 2), col = c('red','blue'))
+
+circos.genomicTrackPlotRegion(
+  plot_data, track.height = 0.08, bg.border = NA, stack = TRUE, 
+  panel.fun = function(region, value, ...) {
+    circos.genomicRect(region, value, col = color_assign(value[[1]]), border = NA, ...) 
+    ylim = get.cell.meta.data('cell.bottom.radius') - 0.5 
+    xlim = label_data[get.cell.meta.data('sector.index'),1] / 2
+    sector.name = label_data[get.cell.meta.data('sector.index'),3]
+    circos.text(xlim, ylim, sector.name, cex = 0.4, niceFacing = FALSE)  
+    xlim = (label_data[get.cell.meta.data('sector.index'),2]+label_data[get.cell.meta.data('sector.index'),1]) / 2
+    sector.name = label_data[get.cell.meta.data('sector.index'),4]
+    circos.text(xlim, ylim, sector.name, cex = 0.4, niceFacing = FALSE)
+  } )
+
+##第四圈，绘制富集因子
+plot_data <- dat[c('id', 'gene_num.min', 'gene_num.max', 'rich.factor')] 
+label_data <- dat['category']  
+color_assign <- c('pathway' = '#F7CC13', 'metabolish' = '#954572','Biological_Process'='#0796E0')#各二级分类的名称和颜色
+
+circos.genomicTrack(
+  plot_data, ylim = c(0, 1), track.height = 0.3, bg.col = 'gray95', bg.border = NA,
+  panel.fun = function(region, value, ...) {
+    sector.name = get.cell.meta.data('sector.index')  #sector.name 
+    circos.genomicRect(region, value, col = color_assign[label_data[sector.name,1]], border = NA, ytop.column = 1, ybottom = 0, ...) 
+    circos.lines(c(0, max(region)), c(0.5, 0.5), col = 'gray', lwd = 0.3) 
+  } )
+
+category_legend <- Legend(
+  labels = c('Signaling Pathways', 'Metabolism',"Biological_Process"),#各二级分类的名称
+  type = 'points', pch = NA, background = c('#F7CC13', '#954572','#0796E0'), #各二级分类的颜色
+  labels_gp = gpar(fontsize = 8), grid_height = unit(0.5, 'cm'), grid_width = unit(0.5, 'cm'))
+
+updown_legend <- Legend(
+  labels = c('Up-regulated', 'Down-regulated'), 
+  type = 'points', pch = NA, background = c('red','blue'), 
+  labels_gp = gpar(fontsize = 8), grid_height = unit(0.5, 'cm'), grid_width = unit(0.5, 'cm'))
+
+pvalue_legend <- Legend(
+  col_fun = colorRamp2(round(seq(0, p_max, length.out = 6), 0), 
+                       colorRampPalette(c('green','red'))(6)),
+  legend_height = unit(3, 'cm'), labels_gp = gpar(fontsize = 8), 
+  title_gp = gpar(fontsize = 9), title_position = 'topleft', title = '-Log10(Pvalue)')
+
+lgd_list_vertical <- packLegend(category_legend, updown_legend, pvalue_legend)
+grid.draw(lgd_list_vertical)
+circos.clear()
+dev.off()
+
+# KEGG可视化
+gene.data <- as.data.frame(prok$logFC)
+rownames(gene.data) <- prok$ID
+pv.out <- pathview(gene.data = gene.data, pathway.id = "04064",species = "hsa", kegg.native = T)
+
+#----9、计算相关性----
+rawdata <- as.matrix(t(GetAssayData(sce_harmony[,sce_harmony$cell_type=="End"], slot = "counts")))
+y <- as.numeric(rawdata[,"VCAM1"])        ## 本次操作中，选取VCAM1基因作为需要分析的单基因，批量求取它与该表达矩阵中其他基因的相关性
+dat <-as.data.frame(rawdata)
+colnames <- colnames(dat)
+cor_data_df <- data.frame(colnames)    ##构建这些基因的数据框
+
+for (i in 1:length(colnames)){
+  test <- cor.test(as.numeric(dat[,i]),y,type="pearson")
+  cor_data_df[i,2] <- test$estimate
+  cor_data_df[i,3] <- test$p.value
+}
+names(cor_data_df) <- c("Symbol","correlation","pvalue")
+head(cor_data_df)
+
+##提取p值小于0.05的数据
+cor_data_sig <- cor_data_df %>%
+  filter(pvalue < 0.05) %>%
+  arrange(desc(abs(correlation)))
+head(cor_data_sig)
+
+cor_data_TME <- cor_data_sig[cor_data_sig$Symbol%in%rownames(DEG)[DEG$p_val<0.05],]
+
+library(ggstatsplot)
+colnames(rawdata)[grepl("^MAC",colnames(rawdata))]
+##利用该包进行绘制相关性的散点图和条形图
+ggscatterstats(data =as.data.frame(rawdata), 
+               y = VCAM1, 
+               x = NFKBIA,
+               centrality.para = "mean",                              
+               margins = "both",                                         
+               xfill = "#CC79A7", 
+               yfill = "#009E73", 
+               marginal.type = "histogram")
+
+#----10、相关性热图----
+library(corrplot)
+#同样用mtcars数据集演示，计算相关性矩阵的方法也一样：
+cormtcars <- round(cor(rawdata[,unique(circ$genes[abs(circ$logFC)>=0.5])]), 3)
+#corrplot包函数cor.mtest()函数计算p值：
+pmtcars <-cor.mtest(rawdata[,unique(circ$genes[abs(circ$logFC)>=0.5])], conf.level= .95)
+
+#这种方法计算得到的是一个p值的列表：
+class(pmtcars)
+## [1] "list"
+head(pmtcars,1)
+library(RColorBrewer)
+display.brewer.all()
+color_1<-rev(brewer.pal(10,"RdYlGn"))
+color_2<-colorRampPalette(c("CornflowerBlue","White","tomato"))  #形成一个连续型颜色函数
+
+corrplot(cormtcars,col = color_1,method = 'circle', order = 'FPC', type = 'lower', diag = FALSE)
+
+#----11、GENIE3----
+exprMatr <- as.matrix(t(rawdata[,unique(circ$genes[abs(circ$logFC)>=0.5])]))
+library(GENIE3)
+library(scales)
+set.seed(1)
+weightMat <- GENIE3(exprMatr)
+dim(weightMat)
+linkList <- getLinkList(weightMat)
+for (i in 1:ncol(weightMat)){
+  weightMat[,i] <- scale(weightMat[,i],center = F,scale = max(abs(weightMat[,i])))
+  weightMat_1[,i] <- rescale(weightMat_1[,i],to = c(-1, 1))
+}
+corrplot(weightMat,col = color_1,col.lim=c(min(weightMat),max(weightMat)))
+
+#----12、韦恩图----
+library(venn) 
+miRNA <- openxlsx::read.xlsx("./VCAM1.xlsx",sheet = 3)
+miRNA$VCAM1 <- gsub("miR","mir",miRNA$VCAM1)
+par(mfrow = c(1,2), xpd=TRUE)
+venn(x = list("VCAM1" = miRNA$VCAM1,"Ischemic.Stroke" = miRNA$Ischemic.Stroke),
+     zcolor=sample(randomColor(100),2), # 调整颜色，style是默认颜色，bw是无颜色，当然也可以自定义颜色
+     opacity = 0.3,  # 调整颜色透明度
+     box = F,        # 是否添加边框
+     ilcs = 1,     # 数字大小
+     sncs = 1        # 组名字体大小
+)
+
+lncRNA <- openxlsx::read.xlsx("./VCAM1.xlsx",sheet = 4)
+venn(x = list("lncRNA" = lncRNA$geneName,"DEGs" = rownames(DEG)[DEG$p_val_adj<=0.05]),
+     zcolor=sample(randomColor(100),2), # 调整颜色，style是默认颜色，bw是无颜色，当然也可以自定义颜色
+     opacity = 0.3,  # 调整颜色透明度
+     box = F,        # 是否添加边框
+     ilcs = 1,     # 数字大小
+     sncs = 1        # 组名字体大小
+)
+
+#----13、直方图----
+library(tidyverse)
+library(rstatix)
+library(ggpubr)
+library(ggtext)
+
+load("~/R/R_project/新冠与脑卒/GSE164485/choroidplexus.rdata")
+sce_harmony <- subset(x = sce_harmony, subset = group != "COVID_HIV")
+sce_End <- subset(x = sce_harmony, idents = "End")
+expr <- data.frame(t(GetAssayData(object = sce_End, slot = "counts")))
+expr$group <- sce_End@meta.data[["group"]]
+
+color <- distinctColorPalette(2)
+my_comparisons<- list( c('Ctrl','COVID'))
+colnames(expr)[grepl("GABPA",colnames(expr))]
+compare_means(RELB~group, expr,  
+              ref.group = "Ctrl", 
+              method = "t.test") 
+ggboxplot(expr, x = "group", 
+          y = "GABPA", 
+          color = "group", 
+          add = "jitter")+ 
+  scale_colour_manual(values = alpha(mycolor,1))+ stat_compare_means(comparisons = my_comparisons,method = "t.test")
+
+#----14、差异基因可视化筛选----
+# 调整矩阵格式
+plot.info_all <- expr[,c("VCAM1","NFKB1","FOS","JUN","NFKBIA","group")] %>%
+  as.data.frame() %>%
+  rownames_to_column("expr") %>%
+  pivot_longer(cols = 2:6,
+               names_to = "VAR",
+               values_to = "VAL")
+# 计算p值
+stat.test <- plot.info_all %>% 
+  group_by(VAR) %>%
+  t_test(VAL ~ group) %>%
+  adjust_pvalue(method = "BH") %>% 
+  add_significance("p.adj")
+stat.test
+stat.test <- stat.test %>% 
+  add_xy_position(x='VAR',dodge = 1)
+
+# 画图
+color <- c("#C084C6","#B6D39E")
+ggboxplot(
+  plot.info_all[order(plot.info_all$VAR),],
+  x = "VAR",
+  y = "VAL",
+  color = "group", 
+  xlab = "",
+  ylab = "",
+  add = "jitter"
+) +
+  scale_colour_manual(values = alpha(color,1))+
+  stat_pvalue_manual(stat.test,  label = "{p.adj.signif}", tip.length = 0, hide.ns = TRUE)+
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
